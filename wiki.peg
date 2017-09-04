@@ -1,0 +1,212 @@
+# Copyright 2017 The Babel Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style
+# license that can be found in the LICENSE file.
+
+package main
+
+type Wiki Peg {
+ start_of_line bool
+ template_noinclude bool
+}
+
+# High-level
+page <- ( pre_block / horizontal_line / wikitext )* !.
+wikitext <- nowiki / noinclude / comment / html / table_of_contents / template_variable / template / heading / list / formatting / image / link / table / angle_brackets / anything_else / break / eol
+# Generally useful rules
+eol <- '\r'? '\n' !{ p.start_of_line = true }
+break <- eol eol+
+eof <- !.
+end <- eol / eof
+space <- [\t ]
+
+# horizontal line
+horizontal_line <- &{ p.start_of_line } "----" "-"* !{ p.start_of_line = false }
+
+# Headings
+heading <- heading4 / heading3 / heading2 / heading1
+heading1 <- heading_marker1 space* ( !heading_marker1 ( formatting / link / anything_else ) )* heading_marker1? space* end
+heading_marker1 <- '=='
+heading2 <- heading_marker2 space* ( !heading_marker2 ( formatting / link / anything_else ) )* heading_marker2? space* end
+heading_marker2 <- '==='
+heading3 <- heading_marker3 space* ( !heading_marker3 ( formatting / link / anything_else ) )* heading_marker3? space* end
+heading_marker3 <- '===='
+heading4 <- heading_marker4 space* ( !heading_marker4 ( formatting / link / anything_else ) )* heading_marker4? space* end
+heading_marker4 <- '=====' '='*
+
+# Lists
+list <- &{ p.start_of_line } ( bullet_list / numbered_list / definition_list )
+list_text <- ( !end ( [*#:] / wikitext ) )* end
+
+# Bullet list
+bullet_list <- bullet_list_entry+
+bullet_list_entry <- bullet space* list_text
+bullet <- '*'+ !{ p.start_of_line = false }
+
+# Definition list (Indentation)
+definition_list <- definition_list_entry+
+definition_list_entry <- definition space* list_text
+definition <- ':'+ !{ p.start_of_line = false }
+
+# Numbered list
+numbered_list <- numbered_list_entry+
+numbered_list_entry <- numbered space* list_text
+numbered <- '#'+ !{ p.start_of_line = false }
+
+# Formatting
+#formatting <- bold_italic / bold / italic
+#bold_italic <- "'''''" ( !"'''''" wikitext )* "'''''"
+#bold <- "'''" ( ( &"'''''" / !"'''" ) wikitext )* "'''"
+#italic <- "''" ( ( &"'''''" / &"'''" / !"''" ) wikitext )* "''"
+formatting <- bold / italic
+bold <- "'''" ( !"'''" ( nowiki / noinclude / comment / html / table_of_contents / template_variable / template / heading / list / inner_italic / image / link / table / angle_brackets / anything_else ) )* "'''"
+italic <- "''" ( ( &bold / !"''" ) ( nowiki / noinclude / comment / html / table_of_contents / template_variable / template / heading / list / inner_bold / image / link / table / angle_brackets / anything_else ) )* "''"
+inner_bold <- "'''" ( !"'''" formatting_text )* "'''"
+inner_italic <- "''" ( !"''" formatting_text )* "''"
+formatting_text <- nowiki / noinclude / comment / html / table_of_contents / template_variable / template / heading / list / image / link / table / angle_brackets / anything_else
+
+# pre-formatted blocks
+pre_block <- &{ p.start_of_line } pre_line+
+pre_line <- ' ' ( !eol . )* ( eol / eof )
+nowiki <- nowiki_open ( !nowiki_close . )* !{ p.start_of_line = false }
+	  nowiki_close
+nowiki_open <- nowiki_open_tag / html_pre_open / html_code_open
+nowiki_close <- nowiki_close_tag / html_pre_close / html_code_close
+nowiki_open_tag <- '<nowiki>'
+nowiki_close_tag <- '</nowiki>'
+html_pre_open <- ( '<pre' ( !'>' . )* '>' / '<PRE>' )
+html_pre_close <- ( '</pre>' / '</PRE>' )
+html_code_open <- ( '<code' ( !'>' . )* '>' / '<CODE>' )
+html_code_close <- ( '</code>' / '</CODE>' )
+
+# Links
+link <- ( local_link / external_link ) !{ p.start_of_line = false }
+local_link <- link_open ':'? namespace? link_path rename? link_close blend
+namespace <- ( !':' !link_close . )* ':'
+link_path <- ( !link_close !'|' . )*
+rename <- '|' ( !link_close . )*
+blend <- ( !space !'=' !"''" ![<[{] !eol !eof [a-z] )*
+
+external_link <- named_link / unnamed_link / url
+named_link <- open_named_link link_url ' '+ link_name+ space* close_named_link
+open_named_link <- '[' !'javascript:'
+close_named_link <- ']'
+
+link_url <- ( !' ' !']' . )+
+link_name <- ( !']' . )+
+
+unnamed_link <- '[' !'javascript:' ( !']' . )* ']'
+url <- protocol '://' ( '%' [0-9a-fA-F][0-9a-fA-F] / [/!$&-.0-;=A-Z_a-z~] )*
+protocol <- ( 'http' / 'https' / 'ftp' )
+link_open <- '[['
+link_close <- ']]'
+
+# Images
+image <- open_image file_indicator arguments? image_caption? close_image
+
+open_image <- '[[' space*
+
+close_image <- space* ']]'
+file_indicator <- ( 'File:' / 'Image:' ) ( !'|' !close_image . )*
+arguments <- '|' ( special_image_variables / generic_variable value ) arguments?
+special_image_variables <- image_type / float / image_link / image_border / image_size
+image_type <- frame / thumb
+frame <- 'frame'
+thumb <- ( 'thumbnail' / 'thumb' )
+image_size <- [0-9]+ 'px'
+float <- ( 'left' / 'right' / 'center' ) / 'none'
+image_link <- 'link=' ( !'|' !close_image . )*
+image_border <- 'border'
+generic_variable <- ( !'|' !'=' !close_image . )*
+value <- '=' ( !'|' !close_image . )*
+image_caption <- '|' (( '[[' (!']]' .)* ']]' )* !close_image . )*
+
+# Tables
+table <- table_open eol* table_caption? ( table_row / table_headers / pseudo_row )* eol* table_close?
+table_specials <- ( [|+}!] / '-' )
+table_delims <- ( ( '|' table_specials ) / ( &{ p.start_of_line } '!' ) / ( &{ p.start_of_line } '|') / ( '!' table_specials ) )
+table_open <- '{|' space* cell_attribute_list*
+
+# -- caption
+table_caption <- '|+' space* ( cell_attribute_list space* '|' )* ( !table_delims wikitext )* &table_delims
+
+# -- row
+pseudo_row <- table_cell
+table_row <- row_open ( simple_row / complex_row )+
+row_open <- '|-' space*
+simple_row <- [ \t]* eol ( table_headers / table_cell )*
+complex_row <- ( !eol . )* eol ( table_headers / table_cell )*
+
+# -- cells
+table_cell <- ( sol_cell / inline_cell )
+cell_attribute_list <- ( ( cell_attribute / cell_junk ) space* )+
+cell_attribute <- cell_attribute_name '=' cell_attribute_value
+cell_attribute_name <- ( !eol !table_delims !'=' . )+
+cell_attribute_value <- '"' ( !table_delims !['"] . )+ '"'
+cell_junk <- ( !( &table_delims ) !eol !'|' . )+
+cell_close <- &table_delims
+
+# -- start of line cell
+sol_cell <- ( sol_cell_complex / sol_cell_simple )
+sol_cell_open <- &{ p.start_of_line } '|' !table_specials
+sol_cell_complex <- ( sol_cell_open cell_attribute_list space* '|' !'|' space* ( !table_delims wikitext )* cell_close? )
+sol_cell_simple <- ( sol_cell_open space* ( !table_delims wikitext )* cell_close? )
+
+# -- inline cell
+inline_cell <- ( inline_cell_complex / inline_cell_simple )
+inline_cell_open <- ( '||' / '!!' )
+inline_cell_complex <- ( inline_cell_open cell_attribute_list space* '|' !'|' space* ( !table_delims wikitext )* cell_close? )
+inline_cell_simple <- inline_cell_open space* ( !table_delims wikitext )* cell_close?
+
+table_close <- '|}'
+
+# -- headers
+table_headers <- ( complex_header / simple_header )+
+complex_header <- &{ p.start_of_line } '!' ( cell_attribute_list* space* '|' space* ( !table_delims !eol wikitext )* ( &table_delims / eol ))
+
+simple_header <- &{ p.start_of_line } '!' space* ( !eol !table_delims wikitext )+ ( eol / &table_delims )
+
+# Templates
+template <- &{ !p.template_noinclude } template_open space* template_name template_content? template_close !{ p.start_of_line = false }
+template_open <- '{{'
+template_name <- ( !eol !template_close !'|' . )*
+template_content <- '|' space* ( !template_close ( eof !{ panic("template end missing") } / nowiki / template_variable / template_nested / . ) )+
+template_close <- '}}'
+template_variable <- '{{{' ( !'}}}' !eol !eof . )* '}}}'
+template_nested <- template_nested_open template_nested_content template_nested_close
+template_nested_open <- '{{'
+template_nested_close <- '}}'
+template_nested_content <- ( !template_nested_close ( eof !{ panic("template end missing") } / nowiki / template_variable / template_nested / . ) )*
+noinclude <- noinclude_open / noinclude_close
+noinclude_open <- ( '<noinclude>' / '<NOINCLUDE>' ) !{ p.template_noinclude = true }
+noinclude_close <- ( '</noinclude>' / '</NOINCLUDE>' ) !{ p.template_noinclude = false }
+
+# Table of Contents
+table_of_contents <- ( notoc / toc / forcetoc )
+notoc <- '__NOTOC__'
+forcetoc <- '__FORCETOC__'
+toc <- '__TOC__'
+
+# HTML markup
+html <- tag_open tag tag_attributes_list? tag_close
+tag_open <- '<'
+tag <- '/'? ( !tag_close_nocap !space . )+
+tag_attributes_list <- ( space ( tag_attribute / tag_junk ) )+
+tag_attribute <- tag_attribute_name '=' tag_attribute_value
+tag_attribute_name <- ( !'=' . )+
+tag_attribute_value <- '"' ( !tag_close_nocap !['"] . )+ '"'
+tag_junk <- ( !tag_close_nocap . )+
+tag_close <- tag_close_nocap !{ p.start_of_line = false }
+tag_close_nocap <- space* '/'? '>'
+
+# comment
+comment <- < comment_open ( !comment_close . )*  comment_close >
+comment_open <- '<!--'
+comment_close <- '-->'
+
+# -- loose angle brackets
+angle_brackets <- angle_left / angle_right
+angle_left <- '<' !{ p.start_of_line = false }
+angle_right <- '>' !{ p.start_of_line = false }
+
+# Other stuff
+anything_else <- !eol . !{ p.start_of_line = false }
